@@ -6,6 +6,7 @@ import tempfile
 from urllib.parse import urlparse, urljoin
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from vot import ToolkitException
 
@@ -57,6 +58,8 @@ def download_json(url):
 
 def download(url, output, callback=None, chunk_size=1024*32):
     with requests.session() as sess:
+        sess.mount('http://', HTTPAdapter(max_retries=5))
+        sess.mount('https://', HTTPAdapter(max_retries=5))
 
         is_gdrive = is_google_drive_url(url)
         
