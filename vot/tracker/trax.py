@@ -358,7 +358,7 @@ class TraxTrackerRuntime(TrackerRuntime):
         else:
             pathvar = "LD_LIBRARY_PATH"
 
-        envvars[pathvar] = envvars[pathvar] + os.pathsep + os.pathsep.join(linkpaths) if pathvar in envvars else os.pathsep.join(linkpaths)
+        envvars[pathvar] = envvars[pathvar] + os.pathsep + os.pathsep.join(linkpaths) if pathvar in envvars else os.environ[pathvar] + os.pathsep + os.pathsep.join(linkpaths)
         envvars["TRAX"] = "1"
 
         self._envvars = envvars
