@@ -24,7 +24,7 @@ import matplotlib.colors as colors
 from attributee import Attributee, Object, Nested, String, Callable, Integer, List
 
 from vot import __version__ as version
-from vot import check_debug
+from vot import check_debug, get_logger
 from vot.dataset import Sequence
 from vot.tracker import Tracker
 from vot.analysis import Axes
@@ -177,7 +177,7 @@ def configure_figure(traits=None):
     elif traits == "eao":
         args["figsize"] = (7, 5)
     elif traits == "attributes":
-        args["figsize"] = (15, 5)
+        args["figsize"] = (10, 5)
 
     return Figure(**args)
 
@@ -304,6 +304,7 @@ class StyleManager(Attributee):
 
         manager = getattr(StyleManager._context, 'style_manager', None)
         if manager is None:
+            get_logger().info("Creating new style manager")
             manager = StyleManager()
             StyleManager._context.style_manager = manager
 
@@ -376,13 +377,12 @@ def generate_document(format: str, config: ReportConfiguration, trackers: typing
         generate_serialized(trackers, sequences, results, storage, "yaml")
     else:
         order = config.sort(results.keys(), trackers, sequences)
-        trackers = [trackers[i] for i in order]
 
         with config.style:
             if format == "html":
                 generate_html_document(trackers, sequences, results, storage)
             elif format == "latex":
-                generate_latex_document(trackers, sequences, results, storage, False)
+                generate_latex_document(trackers, sequences, results, storage, False, order=order)
             elif format == "pdf":
-                generate_latex_document(trackers, sequences, results, storage, True)
+                generate_latex_document(trackers, sequences, results, storage, True, order=order)
 
