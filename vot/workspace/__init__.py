@@ -1,9 +1,11 @@
+"""This module contains the Workspace class that represents the main junction of trackers, datasets and experiments."""
 
 import os
 import typing
 import importlib
 
 import yaml
+from lazy_object_proxy import Proxy
 
 from attributee import Attribute, Attributee, Nested, List, String, CoerceContext
 
@@ -11,8 +13,8 @@ from .. import ToolkitException, get_logger
 from ..dataset import Dataset, load_dataset
 from ..tracker import Registry, Tracker
 from ..stack import Stack, resolve_stack
-from ..utilities import normalize_path, class_fullname
-from ..document import ReportConfiguration
+from ..utilities import normalize_path
+from ..report import ReportConfiguration
 from .storage import LocalStorage, Storage, NullStorage
 
 _logger = get_logger()
@@ -27,6 +29,15 @@ class StackLoader(Attribute):
     """
 
     def coerce(self, value, context: typing.Optional[CoerceContext]):
+        """Coerce a value to a Stack object
+        
+        Args:
+            value (typing.Any): Value to coerce
+            context (typing.Optional[CoerceContext]): Coercion context
+            
+        Returns:
+            Stack: Coerced value
+        """
         importlib.import_module("vot.analysis")
         importlib.import_module("vot.experiment")
         if isinstance(value, str):
@@ -36,27 +47,72 @@ class StackLoader(Attribute):
             if stack_file is None:
                 raise WorkspaceException("Experiment stack does not exist")
 
-            with open(stack_file, 'r') as fp:
-                stack_metadata = yaml.load(fp, Loader=yaml.BaseLoader)
-                return Stack(value, context.parent, **stack_metadata)
-        else:
-            return Stack(None, context.parent, **value)
+            stack = Stack.read(stack_file)
+            stack._name = value
 
-    def dump(self, value):
+            return stack
+        else:
+            return Stack(**value)
+
+    def dump(self, value: "Stack") -> str:
+        """Dump a Stack object to a string or a dictionary
+        
+        Args:
+            value (Stack): Value to dump
+            
+        Returns:
+            str: Dumped value
+        """
         if value.name is None:
             return value.dump()
         else:
             return value.name
+
+class RegistryLoader(Attribute):
+    """Special attribute that converts a list of strings input to a Registry object. The paths are appended to
+    the global registry search paths.
+    """
+    
+    def coerce(self, value, context: typing.Optional[CoerceContext]):
+        
+        from vot import config, get_logger
+        
+        # Workspace registry paths are relative to the workspace directory
+        paths = list(List(String(transformer=lambda x, ctx: normalize_path(x, ctx.parent.directory))).coerce(value, context))
+
+        # Combine the paths with the global registry search paths (relative to the current directory)
+        registry = Registry(paths + [normalize_path(x, os.curdir) for x in config.registry], root=context.parent.directory)
+        registry._paths = paths
+ 
+        get_logger().debug("Found data for %d trackers", len(registry))
+
+        return registry
+
+    def dump(self, value: "Registry") -> typing.List[str]:
+        assert isinstance(value, Registry)
+        return value._paths
 
 class Workspace(Attributee):
     """Workspace class represents the main junction of trackers, datasets and experiments. Each workspace performs 
     given experiments on a provided dataset.
     """
 
-    registry = List(String(transformer=lambda x, ctx: normalize_path(x, ctx.parent.directory)))
+    registry = RegistryLoader() # List(String(transformer=lambda x, ctx: normalize_path(x, ctx.parent.directory)))
     stack = StackLoader()
     sequences = String(default="sequences")
     report = Nested(ReportConfiguration)
+
+    @staticmethod
+    def exists(directory: str) -> bool:
+        """Check if a workspace exists in a given directory.
+
+        Args:
+            directory (str): Directory to check
+
+        Returns:
+            bool: True if the workspace exists, False otherwise.
+        """
+        return os.path.isfile(os.path.join(directory, "config.yaml"))
 
     @staticmethod
     def initialize(directory: str, config: typing.Optional[typing.Dict] = None, download: bool = True) -> None:
@@ -72,7 +128,7 @@ class Workspace(Attributee):
         """
 
         config_file = os.path.join(directory, "config.yaml")
-        if os.path.isfile(config_file):
+        if Workspace.exists(directory):
             raise WorkspaceException("Workspace already initialized")
 
         os.makedirs(directory, exist_ok=True)
@@ -136,7 +192,6 @@ class Workspace(Attributee):
 
         with open(config_file, 'r') as fp:
             config = yaml.load(fp, Loader=yaml.BaseLoader)
-
             return Workspace(directory, **config)
 
     def __init__(self, directory: str, **kwargs):
@@ -147,15 +202,21 @@ class Workspace(Attributee):
             directory ([type]): [description]
         """
         self._directory = directory
-        self._storage = LocalStorage(directory) if directory is not None else NullStorage()
 
+        self._storage = Proxy(lambda: LocalStorage(directory) if directory is not None else NullStorage())
+        
         super().__init__(**kwargs)
+
         dataset_directory = normalize_path(self.sequences, directory)
 
         if not self.stack.dataset is None:
             Workspace.download_dataset(self.stack.dataset, dataset_directory)
 
         self._dataset = load_dataset(dataset_directory)
+
+        # Register storage with all experiments in the stack
+        for experiment in self.stack.experiments.values():
+            experiment._storage = self._storage
 
     @property
     def directory(self) -> str:
